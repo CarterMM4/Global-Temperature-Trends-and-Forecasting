@@ -1,9 +1,7 @@
 # Install required libraries
-!pip install -q kaggle
-!pip install -q prophet
-!pip install -q pmdarima
+!pip install -q kaggle prophet pmdarima
 
-# Upload kaggle.json
+# Upload kaggle.json for Kaggle API access
 from google.colab import files
 files.upload()  # Select the kaggle.json file from your local machine
 
@@ -25,90 +23,87 @@ from statsmodels.tsa.arima.model import ARIMA
 from prophet import Prophet
 from sklearn.metrics import mean_squared_error
 from statsmodels.tsa.seasonal import seasonal_decompose
+from pmdarima import auto_arima
 
-# Load Dataset
+# Load and clean the dataset
 data = pd.read_csv('Global Temperatures.csv')
+data.columns = data.columns.str.strip()  # Clean column names
+data = data.apply(pd.to_numeric, errors='coerce')  # Convert all columns to numeric
 
-# Clean column names by stripping whitespace
-data.columns = data.columns.str.strip()
-
-# Convert relevant columns to numeric, coerce errors to NaN
-for col in data.columns:
-    data[col] = pd.to_numeric(data[col], errors='coerce')
-
-# Combine Year and Month into a datetime column and set as index
+# Combine Year and Month into a datetime column and set it as index
 data['Date'] = pd.to_datetime(data['Year'].astype(str) + '-' + data['Month'].astype(str) + '-01')
 data.set_index('Date', inplace=True)
 data.drop(columns=['Year', 'Month'], inplace=True)
 
-# Display the cleaned data to verify
+# Display cleaned data summary
 print(data.head())
 print(data.info())
 
-# Exploratory Data Analysis (EDA)
+# Exploratory Data Analysis (EDA): Global Temperature Anomalies Over Time
 plt.figure(figsize=(14, 7))
 plt.plot(data['Annual Anomaly'], label='Annual Anomaly')
-plt.plot(data['Five-year Anomaly'], label='Five-Year Anomaly', linestyle='--')
-plt.plot(data['Ten-year Anomaly'], label='Ten-Year Anomaly', linestyle=':')
+plt.plot(data['Five-year Anomaly'], label='5-Year Anomaly', linestyle='--')
+plt.plot(data['Ten-year Anomaly'], label='10-Year Anomaly', linestyle=':')
 plt.title('Global Temperature Anomalies Over Time')
-plt.xlabel('Date')
+plt.xlabel('Year')
 plt.ylabel('Temperature Anomaly (°C)')
 plt.legend()
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
 plt.show()
 
-# Monthly Mean Temperature Anomalies
+# Monthly Mean Temperature Anomalies Heatmap
 data['Year'] = data.index.year
 data['Month'] = data.index.month
-monthly_avg_anomaly = data.groupby(['Year', 'Month'])['Annual Anomaly'].mean().unstack()
+monthly_avg_anomaly = data.pivot_table(index='Year', columns='Month', values='Annual Anomaly', aggfunc='mean')
 
 plt.figure(figsize=(14, 6))
-sns.heatmap(monthly_avg_anomaly, cmap='coolwarm', cbar_kws={'label': 'Temperature Anomaly (°C)'})
+sns.heatmap(monthly_avg_anomaly, cmap='coolwarm', cbar_kws={'label': 'Temperature Anomaly (°C)'}, annot=False)
 plt.title('Monthly Average Temperature Anomalies')
 plt.xlabel('Month')
 plt.ylabel('Year')
+plt.tight_layout()
 plt.show()
 
-# Time Series Decomposition
+# Time Series Decomposition (Annual Anomaly)
 decomposition = seasonal_decompose(data['Annual Anomaly'].dropna(), model='additive', period=12)
 decomposition.plot()
+plt.suptitle('Seasonal Decomposition of Annual Temperature Anomaly', y=1.02)
+plt.tight_layout()
 plt.show()
 
-# Feature Engineering
-data['Decade'] = (data['Year'] // 10) * 10
-data['Anomaly_Diff'] = data['Annual Anomaly'] - data['Annual Anomaly'].mean()
-
-# Train-Test Split
+# Train-Test Split for Modeling
 train = data['Annual Anomaly'][:'2000']
 test = data['Annual Anomaly']['2001':]
 
-# ARIMA Model
-from pmdarima import auto_arima
-
-# Determine optimal ARIMA parameters
+# ARIMA Model: Finding Optimal Parameters
 arima_model = auto_arima(train.dropna(), seasonal=True, m=12)
 print(arima_model.summary())
 
-# Fit ARIMA model
+# Fit ARIMA Model
 arima_model = ARIMA(train.dropna(), order=arima_model.order, seasonal_order=arima_model.seasonal_order)
 arima_result = arima_model.fit()
 
-# Forecast
+# Forecast with ARIMA
 arima_forecast = arima_result.forecast(steps=len(test))
+plt.figure(figsize=(14, 7))
 plt.plot(train, label='Train')
 plt.plot(test, label='Test')
-plt.plot(test.index, arima_forecast, label='ARIMA Forecast')
+plt.plot(test.index, arima_forecast, label='ARIMA Forecast', linestyle='--')
+plt.title('ARIMA Forecast of Temperature Anomaly')
+plt.xlabel('Year')
+plt.ylabel('Temperature Anomaly (°C)')
 plt.legend()
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
 plt.show()
 
-# Evaluate ARIMA
+# Evaluate ARIMA Model
 arima_rmse = np.sqrt(mean_squared_error(test, arima_forecast))
-print(f'ARIMA RMSE: {arima_rmse}')
+print(f'ARIMA RMSE: {arima_rmse:.4f}')
 
 # Prophet Model
-prophet_data = data.reset_index()[['Date', 'Annual Anomaly']]
-prophet_data.columns = ['ds', 'y']  # Prophet expects columns to be 'ds' for date and 'y' for target
-
-# Train Prophet model
+prophet_data = data.reset_index()[['Date', 'Annual Anomaly']].rename(columns={'Date': 'ds', 'Annual Anomaly': 'y'})
 prophet_model = Prophet()
 prophet_model.fit(prophet_data)
 
@@ -117,21 +112,28 @@ future_dates = prophet_model.make_future_dataframe(periods=120, freq='M')
 prophet_forecast = prophet_model.predict(future_dates)
 
 # Plot Prophet Forecast
-fig = prophet_model.plot(prophet_forecast)
+plt.figure(figsize=(14, 7))
+prophet_model.plot(prophet_forecast)
+plt.title('Prophet Forecast of Temperature Anomaly')
+plt.xlabel('Year')
+plt.ylabel('Temperature Anomaly (°C)')
+plt.tight_layout()
 plt.show()
 
-# Evaluate Prophet
+# Evaluate Prophet Model
 prophet_rmse = np.sqrt(mean_squared_error(test, prophet_forecast[-len(test):]['yhat']))
-print(f'Prophet RMSE: {prophet_rmse}')
+print(f'Prophet RMSE: {prophet_rmse:.4f}')
 
-# Comparison of ARIMA and Prophet predictions
+# Comparison of ARIMA and Prophet Predictions
 plt.figure(figsize=(14, 7))
 plt.plot(test, label='Actual Anomaly')
-plt.plot(test.index, arima_forecast, label='ARIMA Forecast')
-plt.plot(test.index, prophet_forecast[-len(test):]['yhat'], label='Prophet Forecast', linestyle='--')
+plt.plot(test.index, arima_forecast, label='ARIMA Forecast', linestyle='--')
+plt.plot(test.index, prophet_forecast[-len(test):]['yhat'], label='Prophet Forecast', linestyle=':')
 plt.title('Comparison of ARIMA and Prophet Forecasts')
-plt.xlabel('Date')
+plt.xlabel('Year')
 plt.ylabel('Temperature Anomaly (°C)')
 plt.legend()
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
 plt.show()
 
